@@ -7,7 +7,7 @@ import edn.stratodonut.trackwork.tracks.ITrackPointProvider;
 import edn.stratodonut.trackwork.tracks.data.PhysTrackData;
 import edn.stratodonut.trackwork.tracks.forces.PhysicsTrackController;
 import edn.stratodonut.trackwork.tracks.network.SuspensionWheelPacket;
-import edn.stratodonut.trackwork.util.ExpDecay;
+import edn.stratodonut.trackwork.util.SpringSmoothing;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.particles.BlockParticleOption;
@@ -64,17 +64,19 @@ public class SuspensionTrackBlockEntity extends TrackBaseBlockEntity implements 
     private Integer trackID;
     public boolean assembled;
     public boolean assembleNextTick = true;
-    private final ExpDecay wheelTravel = new ExpDecay(ExpDecay.Preset.SUSPENSION);
     // Server-side only
     private float lastSyncedWheelTravel;
 
     // Client-side visual state
-    private final ExpDecay displaySpeed = new ExpDecay(ExpDecay.Preset.WHEELSPIN);
     private long lastClientTickNanos;
     private float visualAngle;
     private float prevVisualAngle;
     private float beltScroll;
     private float prevBeltScroll;
+
+    // Client-side springs
+    private final SpringSmoothing wheelTravel = new SpringSmoothing(SpringSmoothing.Preset.SUSPENSION);
+    private final SpringSmoothing displaySpeed = new SpringSmoothing(SpringSmoothing.Preset.WHEELSPIN);
 
     private double suspensionScale = 1.0;
     private float horizontalOffset;

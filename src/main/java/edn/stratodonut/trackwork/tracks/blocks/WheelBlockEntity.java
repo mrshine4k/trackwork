@@ -6,7 +6,7 @@ import com.simibubi.create.foundation.collision.OrientedBB;
 import com.simibubi.create.infrastructure.config.AllConfigs;
 import edn.stratodonut.trackwork.*;
 import edn.stratodonut.trackwork.sounds.TrackSoundScapes;
-import edn.stratodonut.trackwork.util.ExpDecay;
+import edn.stratodonut.trackwork.util.SpringSmoothing;
 import edn.stratodonut.trackwork.tracks.data.SimpleWheelData;
 import edn.stratodonut.trackwork.tracks.forces.SimpleWheelController;
 import edn.stratodonut.trackwork.tracks.network.SimpleWheelPacket;
@@ -63,7 +63,6 @@ public class WheelBlockEntity extends KineticBlockEntity {
     private float steeringValue = 0.0f;
     private float linkedSteeringValue = 0.0f;
     protected final Random random = new Random();
-    private final ExpDecay wheelTravel = new ExpDecay(ExpDecay.Preset.SUSPENSION);
     // Server-side only
     private float lastSyncedWheelTravel;
     private float lastSyncedSteeringValue;
@@ -86,8 +85,9 @@ public class WheelBlockEntity extends KineticBlockEntity {
     private final Vector3d _scratchD = new Vector3d();
 
     // Client-side springs
-    private final ExpDecay steering = new ExpDecay(ExpDecay.Preset.STEERING);
-    private final ExpDecay displaySpeed = new ExpDecay(ExpDecay.Preset.WHEELSPIN);
+    private final SpringSmoothing wheelTravel = new SpringSmoothing(SpringSmoothing.Preset.SUSPENSION);
+    private final SpringSmoothing steering = new SpringSmoothing(SpringSmoothing.Preset.STEERING);
+    private final SpringSmoothing displaySpeed = new SpringSmoothing(SpringSmoothing.Preset.WHEELSPIN);
     private long lastClientTickNanos;
 
     public boolean isFreespin = true;
@@ -221,9 +221,9 @@ public class WheelBlockEntity extends KineticBlockEntity {
             if (isFreespin != wasFreespin) {
                 wasFreespin = isFreespin;
                 if (isFreespin) {
-                    this.displaySpeed.configure(ExpDecay.Preset.FREESPIN_HL.halflife, ExpDecay.Preset.FREESPIN_HL.halflife);
+                    this.displaySpeed.configure(SpringSmoothing.Preset.FREESPIN_HL.halflife, SpringSmoothing.Preset.FREESPIN_HL.halflife);
                 } else {
-                    this.displaySpeed.configure(ExpDecay.Preset.WHEELSPIN.halflife, ExpDecay.Preset.WHEELSPIN.secondaryHalflife);
+                    this.displaySpeed.configure(SpringSmoothing.Preset.WHEELSPIN.halflife, SpringSmoothing.Preset.WHEELSPIN.secondaryHalflife);
                 }
             }
 

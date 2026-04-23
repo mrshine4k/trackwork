@@ -6,7 +6,7 @@ import com.simibubi.create.infrastructure.config.AllConfigs;
 import com.tterrag.registrate.builders.BlockEntityBuilder;
 import edn.stratodonut.trackwork.*;
 import edn.stratodonut.trackwork.sounds.TrackSoundScapes;
-import edn.stratodonut.trackwork.util.ExpDecay;
+import edn.stratodonut.trackwork.util.SpringSmoothing;
 import edn.stratodonut.trackwork.tracks.data.OleoWheelData;
 import edn.stratodonut.trackwork.tracks.forces.OleoWheelController;
 import edn.stratodonut.trackwork.tracks.network.OleoWheelPacket;
@@ -52,7 +52,6 @@ public class OleoWheelBlockEntity extends SmartBlockEntity {
     private double suspensionScale = 1.0;
     private float steeringValue = 0.0f;
     protected final Random random = new Random();
-    private final ExpDecay wheelTravel = new ExpDecay(ExpDecay.Preset.SUSPENSION);
     // Server-side only
     private float lastSyncedWheelTravel;
     private float lastSyncedSteeringValue;
@@ -75,8 +74,9 @@ public class OleoWheelBlockEntity extends SmartBlockEntity {
     private final Vector3d _scratchD = new Vector3d();
 
     // Client-side springs
-    private final ExpDecay steering = new ExpDecay(ExpDecay.Preset.STEERING);
-    private final ExpDecay displaySpeed = new ExpDecay(ExpDecay.Preset.WHEELSPIN);
+    private final SpringSmoothing wheelTravel = new SpringSmoothing(SpringSmoothing.Preset.SUSPENSION);
+    private final SpringSmoothing steering = new SpringSmoothing(SpringSmoothing.Preset.STEERING);
+    private final SpringSmoothing displaySpeed = new SpringSmoothing(SpringSmoothing.Preset.WHEELSPIN);
     private long lastClientTickNanos;
 
     public OleoWheelBlockEntity(BlockEntityType<?> typeIn, BlockPos pos, BlockState state) {
@@ -172,9 +172,9 @@ public class OleoWheelBlockEntity extends SmartBlockEntity {
             if (this.isFreespin != wasFreespin) {
                 wasFreespin = this.isFreespin;
                 if (this.isFreespin) {
-                    this.displaySpeed.configure(ExpDecay.Preset.FREESPIN_HL.halflife, ExpDecay.Preset.FREESPIN_HL.halflife);
+                    this.displaySpeed.configure(SpringSmoothing.Preset.FREESPIN_HL.halflife, SpringSmoothing.Preset.FREESPIN_HL.halflife);
                 } else {
-                    this.displaySpeed.configure(ExpDecay.Preset.WHEELSPIN.halflife, ExpDecay.Preset.WHEELSPIN.secondaryHalflife);
+                    this.displaySpeed.configure(SpringSmoothing.Preset.WHEELSPIN.halflife, SpringSmoothing.Preset.WHEELSPIN.secondaryHalflife);
                 }
             }
 

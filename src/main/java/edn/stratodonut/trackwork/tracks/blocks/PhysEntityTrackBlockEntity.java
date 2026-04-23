@@ -5,7 +5,7 @@ import edn.stratodonut.trackwork.sounds.TrackSoundScapes;
 import edn.stratodonut.trackwork.tracks.ITrackPointProvider;
 import edn.stratodonut.trackwork.tracks.data.PhysEntityTrackData;
 import edn.stratodonut.trackwork.tracks.forces.PhysEntityTrackController;
-import edn.stratodonut.trackwork.util.ExpDecay;
+import edn.stratodonut.trackwork.util.SpringSmoothing;
 import edn.stratodonut.trackwork.wheel.WheelEntity;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
@@ -64,11 +64,13 @@ public class PhysEntityTrackBlockEntity extends TrackBaseBlockEntity implements 
     MutableComponent chatMessage = MutableComponent.create(ComponentContents.EMPTY);
     // Client-side visual state
     private long lastClientTickNanos;
-    private final ExpDecay displaySpeed = new ExpDecay(ExpDecay.Preset.WHEELSPIN);
     private float visualAngle;
     private float prevVisualAngle;
     private float beltScroll;
     private float prevBeltScroll;
+
+    // Client-side springs
+    private final SpringSmoothing displaySpeed = new SpringSmoothing(SpringSmoothing.Preset.WHEELSPIN);
 
     public PhysEntityTrackBlockEntity(BlockEntityType<?> type, BlockPos pos, BlockState state) {
         super(type, pos, state);

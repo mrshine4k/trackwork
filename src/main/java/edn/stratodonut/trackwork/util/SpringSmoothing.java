@@ -6,23 +6,26 @@ import net.minecraft.util.Mth;
  * Critically damped spring for smooth visual interpolation. FPS-independent.
  *
  * Second-order system (position + velocity) that approaches the target as fast
- * as possible without overshoot. Unlike first-order exponential decay, the
- * velocity state preserves momentum between target updates — no stepping at low
- * update rates, no jitter at high rates.
+ * as possible without overshoot. Replaces the previous first-order system which
+ * had no velocity state — it fully converged between packet updates, causing
+ * visible stepping at low update rates and jitter at high rates.
  *
  * Suspension travel: asymmetric. Compression slow (visual weight), rebound fast
  * (quick settle). Snap beyond 1.2 (cliff jumps teleport).
- *   new ExpDecay(Preset.SUSPENSION)
+ *   new SpringSmoothing(Preset.SUSPENSION)
  *
  * Steering angle: symmetric, fast. No overshoot, left/right identical.
- *   new ExpDecay(Preset.STEERING)
+ *   new SpringSmoothing(Preset.STEERING)
  *
- * Wheel RPM: symmetric. Gradual ramp-up, slightly slower deceleration (drift).
- *   new ExpDecay(Preset.WHEELSPIN)
+ * Driven wheel RPM: weighted. Gradual ramp-up, slightly slower deceleration.
+ *   new SpringSmoothing(Preset.WHEELSPIN)
+ *
+ * Freespin wheel RPM: snappy. Swapped in via configure() on freespin state change.
+ *   new SpringSmoothing(Preset.FREESPIN_HL)
  *
  * Spring math from orangeduck's simple_spring_damper_exact (MIT).
  */
-public final class ExpDecay {
+public final class SpringSmoothing {
 
     public enum Preset {
         //                          halflife   snap       secondary
@@ -55,7 +58,7 @@ public final class ExpDecay {
     private float secondaryHalflife;
     private float snapDistance;
 
-    public ExpDecay(Preset preset) {
+    public SpringSmoothing(Preset preset) {
         this.halflife = preset.halflife;
         this.secondaryHalflife = preset.secondaryHalflife;
         this.snapDistance = preset.snapDistance;
