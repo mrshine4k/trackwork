@@ -1,13 +1,11 @@
 package edn.stratodonut.trackwork.tracks.render;
 
 import com.mojang.blaze3d.vertex.PoseStack;
-import com.simibubi.create.content.kinetics.base.KineticBlockEntity;
 import com.simibubi.create.content.kinetics.base.KineticBlockEntityRenderer;
 import edn.stratodonut.trackwork.TrackworkConfigs;
 import edn.stratodonut.trackwork.client.TrackworkPartialModels;
 import edn.stratodonut.trackwork.tracks.blocks.PhysEntityTrackBlockEntity;
 import edn.stratodonut.trackwork.tracks.blocks.TrackBaseBlock;
-import net.createmod.catnip.animation.AnimationTickHolder;
 import net.createmod.catnip.render.CachedBuffers;
 import net.createmod.catnip.render.SuperByteBuffer;
 import net.minecraft.client.renderer.MultiBufferSource;
@@ -37,7 +35,7 @@ public class PhysEntityTrackRenderer extends KineticBlockEntityRenderer<PhysEnti
         BlockState state = be.getBlockState();
         Direction.Axis rotationAxis = getRotationAxisOf(be);
         BlockPos visualPos = be.getBlockPos();
-        float angleForBE = getAngleForBE(be, visualPos, rotationAxis);
+        float angleForBE = getAngleForBE(be, visualPos, rotationAxis, partialTicks);
         Direction.Axis trackAxis = state.getValue(TrackBaseBlock.AXIS);
 
         if (trackAxis == Direction.Axis.X)
@@ -56,13 +54,13 @@ public class PhysEntityTrackRenderer extends KineticBlockEntityRenderer<PhysEnti
         cogs.light(light)
                 .renderInto(ms, buffer.getBuffer(RenderType.solid()));
 
-        if (be.getAssembled()) TrackBeltRenderer.renderBelt(be, partialTicks, ms, buffer, light, new TrackBeltRenderer.ScalableScroll(be, (float) (be.getSpeed() * (be.getWheelRadius() / 0.5)), trackAxis));
+        if (be.getAssembled()) TrackBeltRenderer.renderBelt(be, partialTicks, ms, buffer, light,
+                new TrackBeltRenderer.ScalableScroll(be.getBeltScroll(partialTicks, trackAxis)));
     }
 
-    public static float getAngleForBE(KineticBlockEntity be, final BlockPos pos, Direction.Axis axis) {
-        float time = AnimationTickHolder.getRenderTime(be.getLevel());
+    public static float getAngleForBE(PhysEntityTrackBlockEntity be, final BlockPos pos, Direction.Axis axis, float partialTick) {
         float offset = getRotationOffsetForPosition(be, pos, axis);
-        return (time * be.getSpeed() * 3f / 10 + offset) % 360;
+        return (be.getVisualAngle(partialTick) + offset) % 360;
     }
 
     @Override

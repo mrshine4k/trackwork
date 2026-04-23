@@ -7,6 +7,7 @@ import edn.stratodonut.trackwork.tracks.ITrackPointProvider;
 import edn.stratodonut.trackwork.tracks.data.PhysTrackData;
 import edn.stratodonut.trackwork.tracks.forces.PhysicsTrackController;
 import edn.stratodonut.trackwork.tracks.network.SuspensionWheelPacket;
+import edn.stratodonut.trackwork.util.ExpDecay;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.particles.BlockParticleOption;
@@ -63,14 +64,17 @@ public class SuspensionTrackBlockEntity extends TrackBaseBlockEntity implements 
     private Integer trackID;
     public boolean assembled;
     public boolean assembleNextTick = true;
-    private float wheelTravel;
-    private float prevWheelTravel;
-    private float serverTargetWheelTravel;
+    private final ExpDecay wheelTravel = new ExpDecay(ExpDecay.Preset.SUSPENSION);
     // Server-side only
     private float lastSyncedWheelTravel;
 
-    private static final float COMPRESS_ALPHA = 0.667f;
-    private static final float REBOUND_ALPHA = 0.394f;
+    // Client-side visual state
+    private final ExpDecay displaySpeed = new ExpDecay(ExpDecay.Preset.WHEELSPIN);
+    private long lastClientTickNanos;
+    private float visualAngle;
+    private float prevVisualAngle;
+    private float beltScroll;
+    private float prevBeltScroll;
 
     private double suspensionScale = 1.0;
     private float horizontalOffset;
@@ -155,7 +159,7 @@ public class SuspensionTrackBlockEntity extends TrackBaseBlockEntity implements 
         // Ground particles
         if (this.level.isClientSide && this.ship.get() != null) {
             Vector3d pos = toJOML(Vec3.atBottomCenterOf(this.getBlockPos()));
-            Vector3dc ground = VSGameUtilsKt.getWorldCoordinates(this.level, this.getBlockPos(), pos.sub(UP.mul(this.wheelTravel * 1.2, new Vector3d())));
+            Vector3dc ground = VSGameUtilsKt.getWorldCoordinates(this.level, this.getBlockPos(), pos.sub(UP.mul(this.wheelTravel.getValue() * 1.2, new Vector3d())));
             BlockPos blockpos = BlockPos.containing(toMinecraft(ground));
             BlockState blockstate = this.level.getBlockState(blockpos);
             if (blockstate.isSolid()) {
@@ -177,7 +181,7 @@ public class SuspensionTrackBlockEntity extends TrackBaseBlockEntity implements 
 
                 // TODO: Slip sounds
                 DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> {
-                    float spd = Math.abs(getSpeed());
+                    float spd = Math.abs(getVisualSpeed());
                     float pitch = Mth.clamp((spd / 256f) + .45f, .85f, 1f);
                     if (spd < 8)
                         return;
@@ -199,13 +203,24 @@ public class SuspensionTrackBlockEntity extends TrackBaseBlockEntity implements 
         // TODO: degrass + de-snowlayer
 
         if (this.level.isClientSide) {
-            this.prevWheelTravel = this.wheelTravel;
-            float gap = this.serverTargetWheelTravel - this.wheelTravel;
-            if (gap > 1.2f || gap < -1.2f) {
-                this.wheelTravel = this.serverTargetWheelTravel;
-            } else {
-                this.wheelTravel += gap * (gap >= 0 ? COMPRESS_ALPHA : REBOUND_ALPHA);
+            long now = System.nanoTime();
+            float dt = lastClientTickNanos == 0 ? 0.05f : Math.min((now - lastClientTickNanos) / 1e9f, 0.25f);
+            lastClientTickNanos = now;
+            this.wheelTravel.tick(dt);
+            this.displaySpeed.setTarget(this.getSpeed());
+            this.displaySpeed.tick(dt);
+
+            float visualSpeed = this.displaySpeed.getValue();
+            prevVisualAngle = visualAngle;
+            visualAngle += dt * 20f * visualSpeed * 3f / 10;
+            // %360 causes lerp(0.5, 355, 5) = 180 at wrap seam. Shift both instead.
+            if (Math.abs(visualAngle) > 36000f) {
+                float w = (float) Math.floor(visualAngle / 360f) * 360f;
+                visualAngle -= w;
+                prevVisualAngle -= w;
             }
+            prevBeltScroll = beltScroll;
+            beltScroll += dt * 20f * visualSpeed * (wheelRadius / 0.5f);
             return;
         }
         if (this.assembled) {
@@ -238,13 +253,12 @@ public class SuspensionTrackBlockEntity extends TrackBaseBlockEntity implements 
                 double suspensionTravel = clipResult.equals(TrackworkUtil.ClipResult.MISS) ? effectiveSuspensionTravel : clipResult.suspensionLength().length() - 0.5;
 
                 this.suspensionScale = controller.updateTrackBlock(this.getBlockPos(), data);
-                this.prevWheelTravel = this.wheelTravel;
                 float newWheelTravel = (float) (suspensionTravel + restOffset);
-                float wheelTravelDelta = newWheelTravel - this.wheelTravel;
-                this.wheelTravel = newWheelTravel;
-                if (Math.abs(this.wheelTravel - this.lastSyncedWheelTravel) > 0.04f) {
-                    TrackPackets.getChannel().send(packetTarget(), new SuspensionWheelPacket(this.getBlockPos(), this.wheelTravel));
-                    this.lastSyncedWheelTravel = this.wheelTravel;
+                float wheelTravelDelta = newWheelTravel - this.wheelTravel.getValue();
+                this.wheelTravel.reset(newWheelTravel);
+                if (Math.abs(this.wheelTravel.getValue() - this.lastSyncedWheelTravel) > 0.04f) {
+                    TrackPackets.getChannel().send(packetTarget(), new SuspensionWheelPacket(this.getBlockPos(), this.wheelTravel.getValue()));
+                    this.lastSyncedWheelTravel = this.wheelTravel.getValue();
                 }
 
                 // Entity Damage
@@ -291,7 +305,7 @@ public class SuspensionTrackBlockEntity extends TrackBaseBlockEntity implements 
                 if (wheelTravelDelta < -0.3 && state.hasProperty(SuspensionTrackBlock.WHEEL_VARIANT)
                         && state.getValue(SuspensionTrackBlock.WHEEL_VARIANT) != SuspensionTrackBlock.TrackVariant.blank) {
                     this.level.playSound(null, this.getBlockPos(), SUSPENSION_CREAK.get(), SoundSource.BLOCKS,
-                            Math.clamp(0.0f, 2.0f, Math.abs(wheelTravelDelta * 3 * (this.getSpeed() / 256))*0.5f),
+                            Math.clamp(Math.abs(wheelTravelDelta * 3 * (this.getSpeed() / 256))*0.5f, 0.0f, 2.0f),
                             Math.lerp(1, 0.3f, -wheelTravelDelta) + 0.4F * this.random.nextFloat()
                     );
                 }
@@ -302,13 +316,17 @@ public class SuspensionTrackBlockEntity extends TrackBaseBlockEntity implements 
     @Override
     public void lazyTick() {
         super.lazyTick();
-        if (this.assembled && !this.level.isClientSide && this.ship.get() != null) TrackPackets.getChannel().send(packetTarget(), new SuspensionWheelPacket(this.getBlockPos(), this.wheelTravel));
+        if (this.assembled && !this.level.isClientSide && this.ship.get() != null
+                && Math.abs(this.wheelTravel.getValue() - this.lastSyncedWheelTravel) > 0.01f) {
+            TrackPackets.getChannel().send(packetTarget(), new SuspensionWheelPacket(this.getBlockPos(), this.wheelTravel.getValue()));
+            this.lastSyncedWheelTravel = this.wheelTravel.getValue();
+        }
     }
 
     public void setHorizontalOffset(Vector3dc offset) {
         Direction.Axis axis = this.getBlockState().getValue(AXIS);
         double factor = offset.dot(TrackworkUtil.getForwardVec3d(axis, 1));
-        this.horizontalOffset = Math.clamp(-0.5f, 0.5f, Math.round(factor * 8.0f) / 8.0f);
+        this.horizontalOffset = Math.clamp(Math.round(factor * 8.0f) / 8.0f, -0.5f, 0.5f);
         this.setChanged();
     }
 
@@ -328,8 +346,9 @@ public class SuspensionTrackBlockEntity extends TrackBaseBlockEntity implements 
 
     @Override
     public Vec3 getTrackPointSlope(float partialTicks) {
+        float neighborDown = nextTrackPoint != null ? nextTrackPoint.getPointDownwardOffset(partialTicks) : 0f;
         return new Vec3(0,
-                Mth.lerp(partialTicks, this.nextPointVerticalOffset.getFirst(), this.nextPointVerticalOffset.getSecond()) - this.getWheelTravel(partialTicks),
+                neighborDown - this.getWheelTravel(partialTicks),
                 this.nextPointHorizontalOffset - this.horizontalOffset
         );
     }
@@ -349,7 +368,20 @@ public class SuspensionTrackBlockEntity extends TrackBaseBlockEntity implements 
     @Override
     public float getSpeed() {
         if (!assembled) return 0;
-        return Math.clamp(-TrackworkConfigs.server().maxRPM.get(), TrackworkConfigs.server().maxRPM.get(), super.getSpeed());
+        return Math.clamp(super.getSpeed(), -TrackworkConfigs.server().maxRPM.get(), TrackworkConfigs.server().maxRPM.get());
+    }
+
+    public float getVisualSpeed() {
+        return this.displaySpeed.getValue();
+    }
+
+    public float getVisualAngle(float partialTick) {
+        return Mth.lerp(partialTick, prevVisualAngle, visualAngle);
+    }
+
+    public float getBeltScroll(float partialTick, Direction.Axis axis) {
+        float scroll = Mth.lerp(partialTick, prevBeltScroll, beltScroll);
+        return (axis == Direction.Axis.X) ? scroll : -scroll;
     }
 
     public static void push(Entity entity, Vec3 worldPos) {
@@ -382,7 +414,7 @@ public class SuspensionTrackBlockEntity extends TrackBaseBlockEntity implements 
     public void write(CompoundTag compound, boolean clientPacket) {
         compound.putBoolean("Assembled", this.assembled);
         if (this.trackID != null) compound.putInt("trackBlockID", this.trackID);
-        compound.putFloat("WheelTravel", this.wheelTravel);
+        compound.putFloat("WheelTravel", this.wheelTravel.getValue());
         compound.putFloat("horizontalOffset", this.horizontalOffset);
         super.write(compound, clientPacket);
     }
@@ -392,23 +424,23 @@ public class SuspensionTrackBlockEntity extends TrackBaseBlockEntity implements 
         this.assembled = compound.getBoolean("Assembled");
         if (this.trackID == null && compound.contains("trackBlockID")) this.trackID = compound.getInt("trackBlockID");
         if (clientPacket) {
-            this.serverTargetWheelTravel = compound.getFloat("WheelTravel");
+            // setTarget, not reset. Create's sendData() triggers read() on
+            // every RPM change; reset() zeros spring velocity → snap.
+            this.wheelTravel.setTarget(compound.getFloat("WheelTravel"));
         } else {
-            this.wheelTravel = compound.getFloat("WheelTravel");
-            this.prevWheelTravel = this.wheelTravel;
-            this.serverTargetWheelTravel = this.wheelTravel;
-            this.lastSyncedWheelTravel = this.wheelTravel;
+            this.wheelTravel.reset(compound.getFloat("WheelTravel"));
+            this.lastSyncedWheelTravel = this.wheelTravel.getValue();
         }
         if (compound.contains("horizontalOffset")) this.horizontalOffset = compound.getFloat("horizontalOffset");
         super.read(compound, clientPacket);
     }
 
     public float getWheelTravel() {
-        return this.wheelTravel;
+        return this.wheelTravel.getValue();
     }
 
     public float getWheelTravel(float partialTicks) {
-        return Mth.lerp(partialTicks, prevWheelTravel, wheelTravel);
+        return this.wheelTravel.getValue(partialTicks);
     }
 
     @Override
@@ -417,6 +449,6 @@ public class SuspensionTrackBlockEntity extends TrackBaseBlockEntity implements 
     }
 
     public void handlePacket(SuspensionWheelPacket p) {
-        this.serverTargetWheelTravel = p.wheelTravel;
+        this.wheelTravel.setTarget(p.wheelTravel);
     }
 }

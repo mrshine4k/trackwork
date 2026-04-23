@@ -13,19 +13,22 @@ public final class OleoWheelPacket extends BlockEntityDataPacket<OleoWheelBlockE
     public final float wheelTravel;
     public final float steeringValue;
     public final float horizontalOffset;
+    public final boolean grounded; // Client uses for freespin air decay ramp
 
     public OleoWheelPacket(FriendlyByteBuf buffer) {
         super(buffer);
         this.wheelTravel = buffer.readFloat();
         this.steeringValue = buffer.readFloat();
         this.horizontalOffset = buffer.readFloat();
+        this.grounded = buffer.readBoolean();
     }
 
-    public OleoWheelPacket(BlockPos pos, float wheelTravel, float steeringValue, float horizontalOffset) {
+    public OleoWheelPacket(BlockPos pos, float wheelTravel, float steeringValue, float horizontalOffset, boolean grounded) {
         super(pos);
         this.wheelTravel = wheelTravel;
         this.steeringValue = steeringValue;
         this.horizontalOffset = horizontalOffset;
+        this.grounded = grounded;
     }
 
     @Override
@@ -33,6 +36,7 @@ public final class OleoWheelPacket extends BlockEntityDataPacket<OleoWheelBlockE
         buffer.writeFloat(this.wheelTravel);
         buffer.writeFloat(this.steeringValue);
         buffer.writeFloat(this.horizontalOffset);
+        buffer.writeBoolean(this.grounded);
     }
 
     @Override

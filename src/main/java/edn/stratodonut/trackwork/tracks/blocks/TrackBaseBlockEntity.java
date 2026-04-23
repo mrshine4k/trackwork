@@ -1,6 +1,5 @@
 package edn.stratodonut.trackwork.tracks.blocks;
 
-import com.mojang.datafixers.util.Pair;
 import com.simibubi.create.content.kinetics.base.KineticBlockEntity;
 import edn.stratodonut.trackwork.TrackPackets;
 import edn.stratodonut.trackwork.TrackworkUtil;
@@ -37,15 +36,16 @@ public abstract class TrackBaseBlockEntity extends KineticBlockEntity implements
 
         BlockEntity next = this.level.getBlockEntity(this.getBlockPos().relative(TrackBeltRenderer.getAlong(this.getBlockState())));
         if (next instanceof ITrackPointProvider track) {
-            this.nextPointVerticalOffset = new Pair<>(track.getPointDownwardOffset(0), track.getPointDownwardOffset(1));
+            this.nextTrackPoint = track;
             this.nextPointHorizontalOffset = track.getPointHorizontalOffset();
             this.nextPoint = track.getTrackPointType();
         } else {
+            this.nextTrackPoint = null;
             this.nextPoint = ITrackPointProvider.PointType.NONE;
         }
     }
 
-    protected Pair<Float, Float> nextPointVerticalOffset = new Pair<>(0f, 0f);
+    protected @Nullable ITrackPointProvider nextTrackPoint = null;
     protected float nextPointHorizontalOffset = 0.0f;
     private @NotNull ITrackPointProvider.PointType nextPoint = ITrackPointProvider.PointType.NONE;
     @Override

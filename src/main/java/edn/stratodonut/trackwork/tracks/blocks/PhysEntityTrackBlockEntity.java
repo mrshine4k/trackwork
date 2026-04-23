@@ -5,6 +5,7 @@ import edn.stratodonut.trackwork.sounds.TrackSoundScapes;
 import edn.stratodonut.trackwork.tracks.ITrackPointProvider;
 import edn.stratodonut.trackwork.tracks.data.PhysEntityTrackData;
 import edn.stratodonut.trackwork.tracks.forces.PhysEntityTrackController;
+import edn.stratodonut.trackwork.util.ExpDecay;
 import edn.stratodonut.trackwork.wheel.WheelEntity;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
@@ -61,6 +62,13 @@ public class PhysEntityTrackBlockEntity extends TrackBaseBlockEntity implements 
     private boolean assembled;
     public boolean assembleNextTick = true;
     MutableComponent chatMessage = MutableComponent.create(ComponentContents.EMPTY);
+    // Client-side visual state
+    private long lastClientTickNanos;
+    private final ExpDecay displaySpeed = new ExpDecay(ExpDecay.Preset.WHEELSPIN);
+    private float visualAngle;
+    private float prevVisualAngle;
+    private float beltScroll;
+    private float prevBeltScroll;
 
     public PhysEntityTrackBlockEntity(BlockEntityType<?> type, BlockPos pos, BlockState state) {
         super(type, pos, state);
@@ -207,6 +215,26 @@ public class PhysEntityTrackBlockEntity extends TrackBaseBlockEntity implements 
     public void tick() {
         super.tick();
 
+        if (this.level.isClientSide) {
+            long now = System.nanoTime();
+            float dt = lastClientTickNanos == 0 ? 0.05f : Math.min((now - lastClientTickNanos) / 1e9f, 0.25f);
+            lastClientTickNanos = now;
+            this.displaySpeed.setTarget(this.getSpeed());
+            this.displaySpeed.tick(dt);
+
+            float visualSpeed = this.displaySpeed.getValue();
+            prevVisualAngle = visualAngle;
+            visualAngle += dt * 20f * visualSpeed * 3f / 10;
+            // %360 causes lerp(0.5, 355, 5) = 180 at wrap seam. Shift both instead.
+            if (Math.abs(visualAngle) > 36000f) {
+                float w = (float) Math.floor(visualAngle / 360f) * 360f;
+                visualAngle -= w;
+                prevVisualAngle -= w;
+            }
+            prevBeltScroll = beltScroll;
+            beltScroll += dt * 20f * visualSpeed * (wheelRadius / 0.5f);
+        }
+
         // For backwards compatibility
         if (this.trackID != null) {
             this.assembled = false;
@@ -271,7 +299,7 @@ public class PhysEntityTrackBlockEntity extends TrackBaseBlockEntity implements 
     @OnlyIn(Dist.CLIENT)
     @Override
     public void tickAudio() {
-        float spd = Math.abs(getSpeed());
+        float spd = Math.abs(getVisualSpeed());
         float pitch = Mth.clamp((spd / 256f) + .45f, .85f, 1f);
         if (spd < 8)
             return;
@@ -328,8 +356,9 @@ public class PhysEntityTrackBlockEntity extends TrackBaseBlockEntity implements 
 
     @Override
     public Vec3 getTrackPointSlope(float partialTicks) {
+        float neighborDown = nextTrackPoint != null ? nextTrackPoint.getPointDownwardOffset(partialTicks) : 0f;
         return new Vec3(0,
-                Mth.lerp(partialTicks, this.nextPointVerticalOffset.getFirst(), this.nextPointVerticalOffset.getSecond()) - this.getPointDownwardOffset(partialTicks),
+                neighborDown - this.getPointDownwardOffset(partialTicks),
                 this.nextPointHorizontalOffset
         );
     }
@@ -348,7 +377,20 @@ public class PhysEntityTrackBlockEntity extends TrackBaseBlockEntity implements 
     public float getSpeed() {
         if (!assembled) return 0;
         float maxRpm = TrackworkConfigs.server().maxRPM.get();
-        return Math.clamp(-maxRpm, maxRpm, super.getSpeed());
+        return Math.clamp(super.getSpeed(), -maxRpm, maxRpm);
+    }
+
+    public float getVisualSpeed() {
+        return this.displaySpeed.getValue();
+    }
+
+    public float getVisualAngle(float partialTick) {
+        return Mth.lerp(partialTick, prevVisualAngle, visualAngle);
+    }
+
+    public float getBeltScroll(float partialTick, Direction.Axis axis) {
+        float scroll = Mth.lerp(partialTick, prevBeltScroll, beltScroll);
+        return (axis == Direction.Axis.X) ? scroll : -scroll;
     }
 
     @Override

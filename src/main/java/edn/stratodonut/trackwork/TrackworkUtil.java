@@ -129,4 +129,12 @@ public class TrackworkUtil {
             case Z -> new Vector3d(length, 0, 0);
         };
     }
+
+    public static Vector3d getForwardVec3d(Direction.Axis axis, float length, Vector3d dest) {
+        return switch (axis) {
+            case X -> dest.set(0, 0, length);
+            case Y -> dest.set(0, 0, 0);
+            case Z -> dest.set(length, 0, 0);
+        };
+    }
 }

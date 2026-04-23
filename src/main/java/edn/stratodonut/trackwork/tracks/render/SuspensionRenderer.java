@@ -8,7 +8,6 @@ import edn.stratodonut.trackwork.client.TrackworkPartialModels;
 import edn.stratodonut.trackwork.tracks.blocks.SuspensionTrackBlock;
 import edn.stratodonut.trackwork.tracks.blocks.SuspensionTrackBlockEntity;
 import edn.stratodonut.trackwork.tracks.blocks.TrackBaseBlock;
-import net.createmod.catnip.animation.AnimationTickHolder;
 import net.createmod.catnip.render.CachedBuffers;
 import net.createmod.catnip.render.SuperByteBuffer;
 import net.minecraft.client.renderer.MultiBufferSource;
@@ -35,7 +34,7 @@ public class SuspensionRenderer extends KineticBlockEntityRenderer<SuspensionTra
 //        Boolean alongFirst = state.getValue(GantryCarriageBlock.AXIS_ALONG_FIRST_COORDINATE);
         Direction.Axis rotationAxis = getRotationAxisOf(be);
         BlockPos visualPos = be.getBlockPos();
-        float angleForBE = SuspensionRenderer.getAngleForBE(be, visualPos, rotationAxis);
+        float angleForBE = SuspensionRenderer.getAngleForBE(be, visualPos, rotationAxis, partialTicks);
 //
         Direction.Axis trackAxis = state.getValue(TrackBaseBlock.AXIS);
 //        for (Direction.Axis axis : Iterate.axes)
@@ -70,13 +69,13 @@ public class SuspensionRenderer extends KineticBlockEntityRenderer<SuspensionTra
                     .renderInto(ms, buffer.getBuffer(RenderType.solid()));
         }
 
-        if (be.assembled) TrackBeltRenderer.renderBelt(be, partialTicks, ms, buffer, light, new TrackBeltRenderer.ScalableScroll(be, (float) (be.getSpeed() * (be.getWheelRadius() / 0.5)), trackAxis));
+        if (be.assembled) TrackBeltRenderer.renderBelt(be, partialTicks, ms, buffer, light,
+                new TrackBeltRenderer.ScalableScroll(be.getBeltScroll(partialTicks, trackAxis)));
     }
 
-    public static float getAngleForBE(KineticBlockEntity be, final BlockPos pos, Direction.Axis axis) {
-        float time = AnimationTickHolder.getRenderTime(be.getLevel());
+    public static float getAngleForBE(SuspensionTrackBlockEntity be, final BlockPos pos, Direction.Axis axis, float partialTick) {
         float offset = getRotationOffsetForPosition(be, pos, axis);
-        return (time * be.getSpeed() * 3f / 10 + offset) % 360;
+        return (be.getVisualAngle(partialTick) + offset) % 360;
     }
 
     @Override

@@ -6,6 +6,7 @@ import com.simibubi.create.foundation.collision.OrientedBB;
 import com.simibubi.create.infrastructure.config.AllConfigs;
 import edn.stratodonut.trackwork.*;
 import edn.stratodonut.trackwork.sounds.TrackSoundScapes;
+import edn.stratodonut.trackwork.util.ExpDecay;
 import edn.stratodonut.trackwork.tracks.data.SimpleWheelData;
 import edn.stratodonut.trackwork.tracks.forces.SimpleWheelController;
 import edn.stratodonut.trackwork.tracks.network.SimpleWheelPacket;
@@ -62,20 +63,32 @@ public class WheelBlockEntity extends KineticBlockEntity {
     private float steeringValue = 0.0f;
     private float linkedSteeringValue = 0.0f;
     protected final Random random = new Random();
-    private float wheelTravel;
-    private float prevWheelTravel;
-    private float serverTargetWheelTravel;
+    private final ExpDecay wheelTravel = new ExpDecay(ExpDecay.Preset.SUSPENSION);
     // Server-side only
     private float lastSyncedWheelTravel;
+    private float lastSyncedSteeringValue;
 
-    private static final float COMPRESS_ALPHA = 0.667f;
-    private static final float REBOUND_ALPHA = 0.394f;
-
-    private float prevFreeWheelAngle;
+    // Client-side visual state
+    private float visualAngle;
+    private float prevVisualAngle;
+    private float currentVisualSpeed;
+    private boolean isGrounded;
+    private int airTicks;
+    private static final int AIR_DECAY_TICKS = 40; // 2.0s freespin wind-down at 20tps
+    private boolean wasFreespin;
     private float horizontalOffset;
     private float axialOffset;
     @NotNull
     protected final Supplier<Ship> ship;
+    private final Vector3d _scratchA = new Vector3d();
+    private final Vector3d _scratchB = new Vector3d();
+    private final Vector3d _scratchC = new Vector3d();
+    private final Vector3d _scratchD = new Vector3d();
+
+    // Client-side springs
+    private final ExpDecay steering = new ExpDecay(ExpDecay.Preset.STEERING);
+    private final ExpDecay displaySpeed = new ExpDecay(ExpDecay.Preset.WHEELSPIN);
+    private long lastClientTickNanos;
 
     public boolean isFreespin = true;
     public boolean assembled;
@@ -147,16 +160,18 @@ public class WheelBlockEntity extends KineticBlockEntity {
             return;
         }
 
+        float cachedWheelSpeed = this.level.isClientSide ? this.getWheelSpeed() : 0;
+
         // Ground particles
         if (this.level.isClientSide && this.ship.get() != null) {
             Vector3d pos = toJOML(Vec3.atBottomCenterOf(this.getBlockPos()));
-            Vector3dc ground = VSGameUtilsKt.getWorldCoordinates(this.level, this.getBlockPos(), pos.sub(UP.mul(this.wheelTravel * 1.2, new Vector3d())));
+            Vector3dc ground = VSGameUtilsKt.getWorldCoordinates(this.level, this.getBlockPos(), pos.sub(UP.mul(this.wheelTravel.getValue() * 1.2, new Vector3d())));
             BlockPos blockpos = BlockPos.containing(toMinecraft(ground));
             BlockState blockstate = this.level.getBlockState(blockpos);
             if (blockstate.isSolid()) {
                 Ship s = this.ship.get();
-                Vector3dc reversedWheelVel = s.getShipTransform().getShipToWorldRotation().transform(TrackworkUtil.getForwardVec3d(this.getBlockState().getValue(HORIZONTAL_FACING).getAxis(), this.getWheelSpeed()));
-                if (Math.abs(this.getWheelSpeed()) > 64) {
+                Vector3dc reversedWheelVel = s.getShipTransform().getShipToWorldRotation().transform(TrackworkUtil.getForwardVec3d(this.getBlockState().getValue(HORIZONTAL_FACING).getAxis(), cachedWheelSpeed));
+                if (Math.abs(cachedWheelSpeed) > 64) {
                     // Is this safe without calling BlockState::addRunningEffects?
                     if (blockstate.getRenderShape() != RenderShape.INVISIBLE) {
                         this.level.addParticle(new BlockParticleOption(
@@ -171,9 +186,8 @@ public class WheelBlockEntity extends KineticBlockEntity {
 
                 // TODO: Slip sounds
                 DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> {
-                    float wheelSpeed = getWheelSpeed();
-                    float pitch = Mth.clamp((Math.abs(wheelSpeed) / 256f) + .45f, .85f, 3f);
-                    if (Math.abs(wheelSpeed) < 8)
+                    float pitch = Mth.clamp((Math.abs(cachedWheelSpeed) / 256f) + .45f, .85f, 3f);
+                    if (Math.abs(cachedWheelSpeed) < 8)
                         return;
                     TrackSoundScapes.play(TrackAmbientGroups.WHEEL_GROUND_AMBIENT, worldPosition, pitch);
 
@@ -194,22 +208,36 @@ public class WheelBlockEntity extends KineticBlockEntity {
         Direction dir = this.getBlockState().getValue(HORIZONTAL_FACING);
         BlockPos innerBlock = this.getBlockPos().relative(dir);
         BlockState innerState = this.level.getBlockState(innerBlock);
-        if (innerState.getBlock() instanceof KineticBlock ke && ke.hasShaftTowards(level, innerBlock, innerState, dir.getOpposite())) {
-            isFreespin = false;
-        } else {
-            isFreespin = true;
-            if (this.level.isClientSide) {
-                this.prevFreeWheelAngle += this.getWheelSpeed() * 3f / 10;
-            }
-        }
+        isFreespin = !(innerState.getBlock() instanceof KineticBlock ke
+                && ke.hasShaftTowards(level, innerBlock, innerState, dir.getOpposite()));
 
         if (this.level.isClientSide) {
-            this.prevWheelTravel = this.wheelTravel;
-            float gap = this.serverTargetWheelTravel - this.wheelTravel;
-            if (gap > 1.2f || gap < -1.2f) {
-                this.wheelTravel = this.serverTargetWheelTravel;
-            } else {
-                this.wheelTravel += gap * (gap >= 0 ? COMPRESS_ALPHA : REBOUND_ALPHA);
+            long now = System.nanoTime();
+            float dt = lastClientTickNanos == 0 ? 0.05f : Math.min((now - lastClientTickNanos) / 1e9f, 0.25f);
+            lastClientTickNanos = now;
+            this.wheelTravel.tick(dt);
+            this.steering.tick(dt);
+
+            if (isFreespin != wasFreespin) {
+                wasFreespin = isFreespin;
+                if (isFreespin) {
+                    this.displaySpeed.configure(ExpDecay.Preset.FREESPIN_HL.halflife, ExpDecay.Preset.FREESPIN_HL.halflife);
+                } else {
+                    this.displaySpeed.configure(ExpDecay.Preset.WHEELSPIN.halflife, ExpDecay.Preset.WHEELSPIN.secondaryHalflife);
+                }
+            }
+
+            this.displaySpeed.setTarget(isFreespin ? computeFreespinTarget(cachedWheelSpeed) : this.getDrivenSpeed());
+            this.displaySpeed.tick(dt);
+            currentVisualSpeed = this.displaySpeed.getValue();
+
+            prevVisualAngle = visualAngle;
+            visualAngle += dt * 20f * currentVisualSpeed * 3f / 10;
+            // %360 causes lerp(0.5, 355, 5) = 180 at wrap seam. Shift both instead.
+            if (Math.abs(visualAngle) > 36000f) {
+                float w = (float) Math.floor(visualAngle / 360f) * 360f;
+                visualAngle -= w;
+                prevVisualAngle -= w;
             }
             return;
         }
@@ -258,15 +286,21 @@ public class WheelBlockEntity extends KineticBlockEntity {
                 double suspensionTravel = clipResult.equals(TrackworkUtil.ClipResult.MISS) ? susScaled : clipResult.suspensionLength().length() - 0.5;
                 boolean isOnGround = !clipResult.equals(TrackworkUtil.ClipResult.MISS);
 
+                boolean groundedChanged = this.isGrounded != isOnGround;
+                this.isGrounded = isOnGround;
+
                 this.suspensionScale = controller.updateTrackBlock(this.getBlockPos(), data);
                 float newWheelTravel = (float) (suspensionTravel + restOffset);
-                float delta = newWheelTravel - wheelTravel;
+                float delta = newWheelTravel - this.wheelTravel.getValue();
 
-                this.prevWheelTravel = this.wheelTravel;
-                this.wheelTravel = newWheelTravel;
-                if (Math.abs(this.wheelTravel - this.lastSyncedWheelTravel) > 0.04f || Math.abs(deltaSteeringValue) > 0.12f) {
+                this.wheelTravel.reset(newWheelTravel);
+                float currentSteering = this.getSteeringValue();
+                if (Math.abs(this.wheelTravel.getValue() - this.lastSyncedWheelTravel) > 0.04f
+                        || Math.abs(currentSteering - this.lastSyncedSteeringValue) > 0.02f
+                        || groundedChanged) {
                     this.syncToClient();
-                    this.lastSyncedWheelTravel = this.wheelTravel;
+                    this.lastSyncedWheelTravel = this.wheelTravel.getValue();
+                    this.lastSyncedSteeringValue = currentSteering;
                 }
 
                 // Entity Damage
@@ -310,7 +344,7 @@ public class WheelBlockEntity extends KineticBlockEntity {
 
                 if (delta < -0.3) {
                     this.level.playSound(null, this.getBlockPos(), SUSPENSION_CREAK.get(), SoundSource.BLOCKS,
-                            Math.clamp(0.0f, 2.0f, Math.abs(delta * 3 * (this.getSpeed() / 256))*0.5f),
+                            Math.clamp(Math.abs(delta * 3 * (this.getSpeed() / 256))*0.5f, 0.0f, 2.0f),
                             Math.lerp(1.2f, 0.8f, -delta) + 0.4F * this.random.nextFloat()
                     );
                 }
@@ -327,7 +361,13 @@ public class WheelBlockEntity extends KineticBlockEntity {
     @Override
     public void lazyTick() {
         super.lazyTick();
-        if (this.assembled && !this.level.isClientSide && this.ship.get() != null) this.syncToClient();
+        if (this.assembled && !this.level.isClientSide && this.ship.get() != null
+                && (Math.abs(this.wheelTravel.getValue() - this.lastSyncedWheelTravel) > 0.01f
+                    || Math.abs(this.getSteeringValue() - this.lastSyncedSteeringValue) > 0.01f)) {
+            this.syncToClient();
+            this.lastSyncedWheelTravel = this.wheelTravel.getValue();
+            this.lastSyncedSteeringValue = this.getSteeringValue();
+        }
     }
 
     protected void onLinkedWheel(Consumer<WheelBlockEntity> action) {
@@ -351,7 +391,7 @@ public class WheelBlockEntity extends KineticBlockEntity {
 
     protected void syncToClient() {
         if (!this.level.isClientSide) TrackPackets.getChannel().send(packetTarget(),
-                new SimpleWheelPacket(this.getBlockPos(), this.wheelTravel, this.getSteeringValue(), this.horizontalOffset));
+                new SimpleWheelPacket(this.getBlockPos(), this.wheelTravel.getValue(), this.getSteeringValue(), this.horizontalOffset, this.isGrounded));
     }
 
     /*
@@ -362,35 +402,54 @@ public class WheelBlockEntity extends KineticBlockEntity {
                 .rotateAxis(this.getSteeringValue() * Math.toRadians(30), 0, 1, 0);
     }
 
-    public float getFreeWheelAngle(float partialTick) {
-        return (this.prevFreeWheelAngle + this.getWheelSpeed()*partialTick* 3f/10) % 360;
+    public float getVisualAngle(float partialTick) {
+        return Mth.lerp(partialTick, prevVisualAngle, visualAngle);
     }
     
     public float getWheelSpeed() {
         if (this.isFreespin) {
             Ship s = this.ship.get();
             if (s != null) {
-                Vector3d vel = s.getVelocity().add(s.getOmega().cross(s.getShipToWorld().transformPosition(
-                        toJOML(Vec3.atBottomCenterOf(this.getBlockPos()))).sub(
-                        s.getTransform().getPositionInWorld()), new Vector3d()), new Vector3d()
-                );
+                Vec3 bp = Vec3.atBottomCenterOf(this.getBlockPos());
+                _scratchA.set(bp.x, bp.y, bp.z);
+                s.getShipToWorld().transformPosition(_scratchA, _scratchB)
+                        .sub(s.getTransform().getPositionInWorld());
+                s.getOmega().cross(_scratchB, _scratchC);
+                Vector3dc vel = s.getVelocity().add(_scratchC, _scratchD);
+
                 Direction.Axis axis = this.getBlockState().getValue(HORIZONTAL_FACING).getAxis();
                 int sign = axis == Direction.Axis.X ? 1 : -1;
-                return sign * (float) TrackworkUtil.roundTowardZero(vel.dot(s.getShipToWorld()
-                        .transformDirection(this.getActionVec3d(axis, 1))) * 9.3f * 1/wheelRadius);
+                TrackworkUtil.getForwardVec3d(axis, 1, _scratchA)
+                        .rotateAxis(this.getSteeringValue() * Math.toRadians(30), 0, 1, 0);
+                s.getShipToWorld().transformDirection(_scratchA, _scratchB);
+                return sign * (float) TrackworkUtil.roundTowardZero(vel.dot(_scratchB) * 9.3f * 1 / wheelRadius);
             }
         }
         return this.getDrivenSpeed();
     }
     
+    private float computeFreespinTarget(float rawSpeed) {
+        if (!this.isGrounded) {
+            this.airTicks++;
+        } else {
+            this.airTicks = 0;
+        }
+        if (this.airTicks >= AIR_DECAY_TICKS) return 0;
+        return rawSpeed * (1f - (float) this.airTicks / AIR_DECAY_TICKS);
+    }
+
     public float getDrivenSpeed() {
         return this.getSpeed() * 1/this.wheelRadius;
+    }
+
+    public float getVisualSpeed() {
+        return this.currentVisualSpeed;
     }
 
     @Override
     public void write(CompoundTag compound, boolean clientPacket) {
         compound.putBoolean("Assembled", this.assembled);
-        compound.putFloat("WheelTravel", this.wheelTravel);
+        compound.putFloat("WheelTravel", this.wheelTravel.getValue());
         compound.putFloat("HorizontalOffset", this.horizontalOffset);
         compound.putFloat("AxialOffset", this.axialOffset);
         super.write(compound, clientPacket);
@@ -400,12 +459,13 @@ public class WheelBlockEntity extends KineticBlockEntity {
     protected void read(CompoundTag compound, boolean clientPacket) {
         this.assembled = compound.getBoolean("Assembled");
         if (clientPacket) {
-            this.serverTargetWheelTravel = compound.getFloat("WheelTravel");
+            // setTarget, not reset. Create's RotationPropagator fires sendData()
+            // on every RPM change, which triggers read(). reset() would zero
+            // spring velocity and snap suspension visual under rapid throttle.
+            this.wheelTravel.setTarget(compound.getFloat("WheelTravel"));
         } else {
-            this.wheelTravel = compound.getFloat("WheelTravel");
-            this.prevWheelTravel = this.wheelTravel;
-            this.serverTargetWheelTravel = this.wheelTravel;
-            this.lastSyncedWheelTravel = this.wheelTravel;
+            this.wheelTravel.reset(compound.getFloat("WheelTravel"));
+            this.lastSyncedWheelTravel = this.wheelTravel.getValue();
         }
         this.horizontalOffset = compound.getFloat("HorizontalOffset");
         this.axialOffset = compound.getFloat("AxialOffset");
@@ -417,7 +477,7 @@ public class WheelBlockEntity extends KineticBlockEntity {
     }
 
     public float getWheelTravel(float partialTicks) {
-        return Mth.lerp(partialTicks, prevWheelTravel, wheelTravel);
+        return this.wheelTravel.getValue(partialTicks);
     }
 
     /**
@@ -425,10 +485,15 @@ public class WheelBlockEntity extends KineticBlockEntity {
      **/
     public void setSteeringValue(float value) {
         this.steeringValue = value;
+        this.steering.setTarget(value);
     }
 
     public float getSteeringValue() {
         return Math.abs(linkedSteeringValue) > Math.abs(steeringValue) ? linkedSteeringValue : steeringValue;
+    }
+
+    public float getSteeringValue(float partialTick) {
+        return this.steering.getValue(partialTick);
     }
     
     public void setOffset(Vector3dc offset, Direction face) {
@@ -442,7 +507,7 @@ public class WheelBlockEntity extends KineticBlockEntity {
 
     public void setAxialOffset(Vector3dc offset, Direction.Axis axis) {
         double factor = offset.dot(TrackworkUtil.getAxisAsVec(axis));
-        this.axialOffset = Math.clamp(-0.4f, 0.4f, Math.round(factor * 8.0f) / 8.0f);
+        this.axialOffset = Math.clamp(Math.round(factor * 8.0f) / 8.0f, -0.4f, 0.4f);
         this.onLinkedWheel(wbe -> {
             wbe.axialOffset = -this.axialOffset;
             wbe.syncToClient();
@@ -456,7 +521,7 @@ public class WheelBlockEntity extends KineticBlockEntity {
 
     public void setHorizontalOffset(Vector3dc offset, Direction.Axis axis) {
         double factor = offset.dot(getActionVec3d(axis, 1));
-        this.horizontalOffset = Math.clamp(-0.4f, 0.4f, Math.round(factor * 8.0f) / 8.0f);
+        this.horizontalOffset = Math.clamp(Math.round(factor * 8.0f) / 8.0f, -0.4f, 0.4f);
         this.onLinkedWheel(wbe -> {
             wbe.horizontalOffset = this.horizontalOffset;
             wbe.syncToClient();
@@ -494,8 +559,10 @@ public class WheelBlockEntity extends KineticBlockEntity {
     }
 
     public void handlePacket(SimpleWheelPacket p) {
-        this.serverTargetWheelTravel = p.wheelTravel;
+        this.wheelTravel.setTarget(p.wheelTravel);
         this.steeringValue = p.steeringValue;
+        this.steering.setTarget(p.steeringValue);
         this.horizontalOffset = p.horizontalOffset;
+        this.isGrounded = p.grounded;
     }
 }

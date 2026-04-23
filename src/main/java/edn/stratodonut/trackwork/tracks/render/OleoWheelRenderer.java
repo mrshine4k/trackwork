@@ -23,7 +23,7 @@ public class OleoWheelRenderer extends SafeBlockEntityRenderer<OleoWheelBlockEnt
     @Override
     protected void renderSafe(OleoWheelBlockEntity be, float partialTicks, PoseStack ms, MultiBufferSource bufferSource, int light, int overlay) {
         BlockState state = be.getBlockState();
-        float angleForBE = be.getFreeWheelAngle(partialTicks);
+        float angleForBE = be.getVisualAngle(partialTicks);
         Direction trackDir = state.getValue(OleoWheelBlock.AXLE_FACING);
 
         float axisMult = (trackDir.getAxis() == Direction.Axis.X) ? 1 : -1;
@@ -78,7 +78,7 @@ public class OleoWheelRenderer extends SafeBlockEntityRenderer<OleoWheelBlockEnt
         wheels.center()
                 .rotate(quat)
                 .translate(horizontalOffset * -axisMult, -wheelTravel - 0.5, axialOffset)
-                .rotateYDegrees(be.getSteeringValue() * 30)
+                .rotateYDegrees(be.getSteeringValue(partialTicks) * 30)
                 .rotateZDegrees(-angleForBE)
                 .uncenter();
 

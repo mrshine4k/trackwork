@@ -1,14 +1,12 @@
 package edn.stratodonut.trackwork.tracks.render;
 
 import com.mojang.blaze3d.vertex.PoseStack;
-import com.simibubi.create.content.kinetics.base.KineticBlockEntity;
 import com.simibubi.create.content.kinetics.base.RotatedPillarKineticBlock;
 import edn.stratodonut.trackwork.client.TrackworkPartialModels;
 import edn.stratodonut.trackwork.client.TrackworkSpriteShifts;
 import edn.stratodonut.trackwork.tracks.ITrackPointProvider;
 import edn.stratodonut.trackwork.tracks.blocks.TrackBaseBlock;
 import edn.stratodonut.trackwork.tracks.blocks.TrackBaseBlockEntity;
-import net.createmod.catnip.animation.AnimationTickHolder;
 import net.createmod.catnip.render.CachedBuffers;
 import net.createmod.catnip.render.SpriteShiftEntry;
 import net.createmod.catnip.render.SuperByteBuffer;
@@ -95,7 +93,7 @@ public class TrackBeltRenderer {
                         .translate(0, -fromTrack.getPointDownwardOffset(partialTicks), fromTrack.getPointHorizontalOffset())
                         .rotateXDegrees( (angleOffset * 180f / ((float)Math.PI)))
                         .scale(1, largeScale, length)
-                        .shiftUVScrolling(TrackworkSpriteShifts.BELT, scroll.getAtScale(length))
+                        .shiftUVScrolling(TrackworkSpriteShifts.BELT, scroll.getAtScale(0.5f))
                         .uncenter();
                 link.light(light).renderInto(ms, buf.getBuffer(RenderType.solid()));
             } else {                                                                // Ends
@@ -108,7 +106,7 @@ public class TrackBeltRenderer {
                         .translate(0, -fromTrack.getPointDownwardOffset(partialTicks), fromTrack.getPointHorizontalOffset())
                         .rotateXDegrees(angleOffset * 180f / ((float)Math.PI))
                         .scale(1, largeScale, length)
-                        .shiftUVScrolling(TrackworkSpriteShifts.BELT, scroll.getAtScale(length))
+                        .shiftUVScrolling(TrackworkSpriteShifts.BELT, scroll.getAtScale(1.0f))
                         .uncenter();
                 link.light(light).renderInto(ms, buf.getBuffer(RenderType.solid()));
             }
@@ -116,28 +114,22 @@ public class TrackBeltRenderer {
     }
 
     public static class ScalableScroll {
-        private final float trueSpeed;
-        private final float time;
+        private final float accumulatedScroll;
         private final float spriteSize;
         private final float scrollMult;
 
-        public ScalableScroll(KineticBlockEntity be, final float speed, Direction.Axis axis) {
-            this.trueSpeed = (axis == Direction.Axis.X) ? speed : -speed;
-            this.time = AnimationTickHolder.getRenderTime(be.getLevel()) * 1;
-
-            this.scrollMult = 0.5f;
+        public ScalableScroll(float accumulatedScroll) {
+            this.accumulatedScroll = accumulatedScroll;
             SpriteShiftEntry spriteShift = TrackworkSpriteShifts.BELT;
             this.spriteSize = spriteShift.getTarget().getV1() - spriteShift.getTarget().getV0();
+            this.scrollMult = 0.5f;
         }
 
         public float getAtScale(float scale) {
-            float speed = this.trueSpeed / scale;
-
-            if (speed != 0) {
-                double scroll = speed * this.time / (31.5 * 16);
+            if (accumulatedScroll != 0) {
+                double scroll = accumulatedScroll / scale / (31.5 * 16);
                 scroll = scroll - Math.floor(scroll);
                 scroll = scroll * this.spriteSize * this.scrollMult;
-
                 return (float) scroll;
             }
             return 0;

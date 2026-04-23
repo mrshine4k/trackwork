@@ -6,7 +6,6 @@ import edn.stratodonut.trackwork.TrackworkConfigs;
 import edn.stratodonut.trackwork.client.TrackworkPartialModels;
 import edn.stratodonut.trackwork.tracks.blocks.WheelBlock;
 import edn.stratodonut.trackwork.tracks.blocks.WheelBlockEntity;
-import net.createmod.catnip.animation.AnimationTickHolder;
 import net.createmod.catnip.render.CachedBuffers;
 import net.createmod.catnip.render.SuperByteBuffer;
 import net.minecraft.client.renderer.MultiBufferSource;
@@ -125,7 +124,7 @@ public class SimpleWheelRenderer extends KineticBlockEntityRenderer<WheelBlockEn
             wheels.center()
                     .rotateYDegrees(-yRot)
                     .translate(horizontalOffset * -axisMult, -wheelTravel - 0.5, -wheelTuck)
-                    .rotateYDegrees(be.getSteeringValue() * 30)
+                    .rotateYDegrees(be.getSteeringValue(partialTicks) * 30)
                     .rotateZDegrees(-angleForBE)
                     .uncenter();
 
@@ -146,10 +145,8 @@ public class SimpleWheelRenderer extends KineticBlockEntityRenderer<WheelBlockEn
     }
 
     public static float getAngleForBE(WheelBlockEntity be, final BlockPos pos, Direction.Axis axis, float partialTick) {
-        if (be.isFreespin) return be.getFreeWheelAngle(partialTick);
-        float time = AnimationTickHolder.getRenderTime(be.getLevel());
         float offset = getRotationOffsetForPosition(be, pos, axis);
-        return (time * be.getWheelSpeed() * 3f / 10 + offset) % 360;
+        return (be.getVisualAngle(partialTick) + offset) % 360;
     }
 
     @Override
